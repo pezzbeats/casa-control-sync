@@ -14,7 +14,117 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      devices: {
+        Row: {
+          id: string
+          ip_address: string | null
+          location_id: string | null
+          name: string
+          state: string
+          type: string
+        }
+        Insert: {
+          id?: string
+          ip_address?: string | null
+          location_id?: string | null
+          name: string
+          state?: string
+          type: string
+        }
+        Update: {
+          id?: string
+          ip_address?: string | null
+          location_id?: string | null
+          name?: string
+          state?: string
+          type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "devices_location_id_fkey"
+            columns: ["location_id"]
+            isOneToOne: false
+            referencedRelation: "locations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      locations: {
+        Row: {
+          id: string
+          name: string
+        }
+        Insert: {
+          id?: string
+          name: string
+        }
+        Update: {
+          id?: string
+          name?: string
+        }
+        Relationships: []
+      }
+      scenes: {
+        Row: {
+          desired_state: string
+          device_id: string | null
+          id: string
+          scene_name: string
+        }
+        Insert: {
+          desired_state: string
+          device_id?: string | null
+          id?: string
+          scene_name: string
+        }
+        Update: {
+          desired_state?: string
+          device_id?: string | null
+          id?: string
+          scene_name?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scenes_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "devices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      sensor_events: {
+        Row: {
+          device_id: string | null
+          event_type: string
+          id: string
+          timestamp: string
+          value: string | null
+        }
+        Insert: {
+          device_id?: string | null
+          event_type: string
+          id?: string
+          timestamp?: string
+          value?: string | null
+        }
+        Update: {
+          device_id?: string | null
+          event_type?: string
+          id?: string
+          timestamp?: string
+          value?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "sensor_events_device_id_fkey"
+            columns: ["device_id"]
+            isOneToOne: false
+            referencedRelation: "devices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
