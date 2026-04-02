@@ -164,9 +164,112 @@ The following n8n workflows interact with the Supabase `devices` table managed b
 |---|---|---|---|
 | Motion-Activated Lighting | PIR HTTP webhook | `devices` (by `location_id`, `type=light`) | `devices.state` |
 | Geyser Auto-Off Timer | Geyser-on webhook | — | `devices.state` |
-| Sunset Outdoor Lighting | Daily cron + API | `devices` (outdoor lights) | `devices.state` |
-| Telegram Bot Commands | Telegram message | `devices` (by name) | `devices.state` |
+| Sunset Outdoor Lighting | Daily cron + sunrise-sunset API | `devices` (outdoor lights) | `devices.state` |
+| Telegram Bot Commands | Telegram message | `devices` (by name, ilike match) | `devices.state` |
 | Morning / Goodnight Scenes | Cron (07:00 / 23:00) | `scenes` table | `devices.state` |
+
+### Workflow 1 — Motion-Activated Lighting
+
+**Trigger:** ESP32 PIR sensor POSTs to n8n webhook `/motion-trigger`:
+```json
+{ "sensor_id": "pir_entrance", "location_id": "<uuid>", "motion": true }
+```
+
+**Logic:**
+1. Queries `devices` filtered by `location_id` + `type = 'light'`
+2. IF current hour < 6 or > 18 → turn lights on (HTTP GET `{ip_address}/on`)
+3. Updates `devices.state = 'on'`
+4. Waits 5 minutes (n8n Wait node)
+5. Sends HTTP GET `{ip_address}/off`, updates `devices.state = 'off'`
+
+**UI implications:** The dashboard will reflect toggled state via Realtime when n8n writes back. Motion events create parallel n8n executions; no deduplication — last off-timer wins.
+
+---
+
+### Workflow 2 — Geyser Auto-Off Timer
+
+**Trigger:** UI or device POSTs to n8n webhook `/geyser-on`:
+```json
+{ "device_id": "<uuid>", "location_id": "<uuid>", "state": "on" }
+```
+
+**Logic:**
+1. Sends HTTP GET `{geyser_ip}/on`
+2. Updates `devices.state = 'on'`
+3. Waits 30 minutes
+4. Sends HTTP GET `{geyser_ip}/off`, updates `devices.state = 'off'`
+5. Sends Telegram message: `"The geyser has been auto-turned OFF after 30 minutes."`
+
+**UI implications:** If the user toggles the geyser ON via this dashboard, set `ip_address` to the n8n webhook URL (`/geyser-on`) rather than the device IP directly, so n8n manages the timer. If toggling directly to the device, the 30-min timer won't be started.
+
+---
+
+### Workflow 3 — Sunset Outdoor Lighting
+
+**Trigger:** n8n Cron at 12:00 UTC daily.
+
+**Logic:**
+1. Calls `https://api.sunrise-sunset.org/json?lat=<lat>&lng=<lng>&formatted=0`
+2. Extracts `results.sunset` (ISO 8601 UTC string)
+3. Waits until that timestamp (n8n Wait node — "wait until date")
+4. Sends HTTP GET `{outdoor_light_ip}/on`
+5. Updates `devices.state = 'on'` for outdoor light devices
+
+**Schema dependency:** Relies on devices having `type = 'light'` and being queryable by outdoor location. Sunrise-sunset API returns UTC times — n8n server runs UTC so no conversion needed.
+
+---
+
+### Workflow 4 — Telegram Bot Command Interface
+
+**Trigger:** n8n Telegram Trigger node (bot receives message via BotFather webhook).
+
+**Supported commands:**
+| Command | Action |
+|---|---|
+| `/status` | Fetches all `devices`, replies with name + state list (Markdown formatted) |
+| `/on <device name>` | Queries `devices` by name (`ilike`), sends HTTP `/on`, updates state, replies |
+| `/off <device name>` | Same as above with `/off` |
+
+**Device lookup:** Uses case-insensitive `ilike` match on `devices.name`. Device names must be set in Supabase for this to work. If no match, bot replies with "Device not found."
+
+**Credentials:** One Telegram bot credential (`HomeBot`) handles both sending notifications (Workflow 2) and receiving commands (this workflow).
+
+---
+
+### Workflow 5 — Scheduled Morning / Goodnight Scenes
+
+**Triggers:**
+- Morning: Cron `0 7 * * *` (07:00 UTC)
+- Goodnight: Cron `0 23 * * *` (23:00 UTC)
+
+**Morning actions (parallel):**
+1. HTTP GET `{curtain_ip}/open` → `devices.state = 'open'`
+2. HTTP GET `{bedroom_light_ip}/on` → `devices.state = 'on'`
+3. After above complete: HTTP GET `{garden_light_ip}/off` → `devices.state = 'off'`
+
+**Goodnight actions:**
+1. Turn off all lights (loop `devices WHERE type='light'`)
+2. HTTP GET `{curtain_ip}/close` → `devices.state = 'closed'`
+3. Optional Telegram notification
+
+**Scenes table usage:** The `scenes` table can drive these routines — n8n queries `scenes WHERE scene_name='morning'` and loops through `device_id` + `desired_state` rows. Reconfiguring a scene only requires editing DB rows, not the n8n workflow.
+
+---
+
+### Device HTTP Endpoint Convention
+
+All ESP32/ESP8266 devices expose:
+```
+GET {ip_address}/on    → turns device on, returns 200
+GET {ip_address}/off   → turns device off, returns 200
+POST {ip_address}/     → optional, accepts { "state": "on"|"off" }
+```
+
+The UI's `triggerDeviceWebhook()` (`src/lib/trigger.ts`) uses POST with `{ state }` body. n8n uses GET. Both patterns must be supported by device firmware.
+
+### n8n ↔ Supabase Credential
+
+n8n uses a single "Supabase Account" credential (service role key) configured under n8n Credentials. The credential is **not** the same anon key embedded in this UI — n8n uses the service role key to bypass RLS when needed. The UI uses the anon key with RLS enforced.
 
 ## Known Gaps
 
